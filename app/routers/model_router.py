@@ -8,6 +8,7 @@ from keras.models import Sequential
 from keras.layers import Dense, Dropout, LSTM, Conv1D, MaxPooling1D, Flatten
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.preprocessing import MinMaxScaler
 from statsmodels.tsa.api import SimpleExpSmoothing
 import matplotlib.pyplot as plt
 
