@@ -38,7 +38,7 @@ os.environ['PYTHONHASHSEED'] = '42'
 
 app = FastAPI(title="Forex Signal Generator API", description="FastAPI backend for forex trading signals using LSTM and CNN-LSTM models")
 
-app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 # Constants
 ACCESS_TOKEN = 'd917178f8075576c341cbe85848de18e-9575706fb366ffd63dbbd057ecc8d847'
@@ -78,12 +78,16 @@ app.include_router(signal_router)
 app.include_router(indicators_router)
 app.include_router(trading_router)
 
+# Allow Vercel frontend to call backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://forex-frontend-2c27-d06fc29ps-pritex32s-projects.vercel.app/"],  # later replace with your Vercel URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/")
 async def read_root():
-    with open("static/index.html", "r") as f:
-        return HTMLResponse(f.read())
-    return html_content
+    return {"message": "API is running"}
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
