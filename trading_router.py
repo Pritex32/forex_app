@@ -1,144 +1,145 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter
 import pandas as pd
-import numpy as np
-import os
-import pickle
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, LSTM, Conv1D, MaxPooling1D, Flatten
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
-from statsmodels.tsa.api import SimpleExpSmoothing
-import matplotlib.pyplot as plt
+import ta
+import plotly.graph_objects as go
+import plotly.express as px
+from app.routers.model_router import data_df
 
-router = APIRouter(prefix="/api/models", tags=["models"])
+router = APIRouter(prefix="/api/indicators", tags=["indicators"])
 
-class TrainRequest(BaseModel):
-    data: list  # list of dicts from data fetch
-    model_type: str  # "lstm" or "cnn_lstm"
-
-class PredictRequest(BaseModel):
-    model_type: str
-    n_periods: int = 5
-
-global scaler, lstm_model, cnn_lstm_model, data_df
-
-scaler = MinMaxScaler(feature_range=(0, 1))
-lstm_model = None
-cnn_lstm_model = None
-data_df = None
-
-@router.post("/train")
-async def train_model(request: TrainRequest):
-    global scaler, lstm_model, cnn_lstm_model, data_df
-
-    df = pd.DataFrame(request.data)
-    if df.empty:
-        raise HTTPException(status_code=400, detail="No data provided")
-
-    df.dropna(inplace=True)
-    df.drop_duplicates(inplace=True)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    df.set_index('timestamp', inplace=True)
-
-    data_df = df.copy()
-    open_price = df[['open']].values
-
-    scaler.fit(open_price)
-    scaler_data = scaler.transform(open_price)
-
-    x = []
-    y = []
-    for i in range(60, len(scaler_data)):
-        x.append(scaler_data[i-60:i])
-        y.append(scaler_data[i])
-    x = np.array(x)
-    y = np.array(y)
-
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.3, random_state=42)
-
-    if request.model_type == "lstm":
-        lstm = Sequential()
-        lstm.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], x_train.shape[2])))
-        lstm.add(Dropout(0.5))
-        lstm.add(LSTM(units=50, return_sequences=True))
-        lstm.add(Dropout(0.5))
-        lstm.add(LSTM(units=50, return_sequences=True))
-        lstm.add(Dropout(0.5))
-        lstm.add(LSTM(units=50, return_sequences=False))
-        lstm.add(Dropout(0.5))
-        lstm.add(Dense(units=1))
-
-        lstm.compile(optimizer='adam', loss='mean_absolute_error')
-        lstm.fit(x_train, y_train, validation_data=(x_test, y_test), batch_size=32, epochs=1, verbose=1)
-        lstm_model = lstm
-
-        # Save model
-        lstm.save('models/lstm_model.h5')
-
-        # Predictions for metrics
-        pred = lstm.predict(x_test)
-        inv_pred = scaler.inverse_transform(pred)
-        inv_y_test = scaler.inverse_transform(y_test)
-        rmse = np.sqrt(mean_squared_error(inv_y_test, inv_pred))
-        r2 = r2_score(inv_y_test, inv_pred)
-
-        return {"message": "LSTM model trained", "rmse": rmse, "r2": r2}
-
-    elif request.model_type == "cnn_lstm":
-        cnn_lstm = Sequential()
-        cnn_lstm.add(Conv1D(filters=64, kernel_size=3, activation='relu', input_shape=(x_train.shape[1], x_train.shape[2])))
-        cnn_lstm.add(MaxPooling1D(2))
-        cnn_lstm.add(LSTM(units=50))
-        cnn_lstm.add(Dropout(0.3))
-        cnn_lstm.add(Dense(units=1))
-
-        cnn_lstm.compile(optimizer='adam', loss='mse')
-        cnn_lstm.fit(x_train, y_train, validation_data=(x_test, y_test), batch_size=32, epochs=1, verbose=1)
-        cnn_lstm_model = cnn_lstm
-
-        # Save model
-        cnn_lstm.save('models/cnn_lstm_model.h5')
-
-        return {"message": "CNN-LSTM model trained"}
-
-    else:
-        raise HTTPException(status_code=400, detail="Invalid model type")
-
-@router.post("/predict")
-async def predict_future(request: PredictRequest):
-    global scaler, lstm_model, cnn_lstm_model, data_df
-
+@router.get("/charts/price_ma")
+async def get_price_ma_chart():
     if data_df is None:
-        raise HTTPException(status_code=400, detail="No data loaded. Train model first.")
+        return {"error": "No data loaded"}
 
-    if request.model_type == "lstm" and lstm_model is None:
-        if os.path.exists('models/lstm_model.h5'):
-            lstm_model = keras.models.load_model('models/lstm_model.h5')
-        else:
-            raise HTTPException(status_code=400, detail="LSTM model not trained")
+    rollmean = data_df['open'].rolling(50).mean()
+    fig = px.line(data_df, x=data_df.index, y='open', title='Open price yearly chart', labels={'open': 'Open Price'})
+    fig.add_scatter(x=data_df.index, y=rollmean, mode='lines', name='50 MA')
+    return fig.to_json()
 
-    if request.model_type == "cnn_lstm" and cnn_lstm_model is None:
-        if os.path.exists('models/cnn_lstm_model.h5'):
-            cnn_lstm_model = keras.models.load_model('models/cnn_lstm_model.h5')
-        else:
-            raise HTTPException(status_code=400, detail="CNN-LSTM model not trained")
+@router.get("/charts/resampled")
+async def get_resampled_charts():
+    if data_df is None:
+        return {"error": "No data loaded"}
 
-    last_days = scaler.transform(data_df[['open']].values[-60:]).reshape(1, 60, 1)
-    future_prediction = []
+    df = data_df.copy()
+    df.index = pd.to_datetime(df.index)
 
-    for _ in range(request.n_periods):
-        if request.model_type == "lstm":
-            nxt_pred = lstm_model.predict(last_days)
-        elif request.model_type == "cnn_lstm":
-            nxt_pred = cnn_lstm_model.predict(last_days)
-        future_prediction.append(nxt_pred[0, 0])
-        last_days = np.append(last_days[:, 1:, :], [[[nxt_pred[0, 0]]]], axis=1)
+    monthly_open = df['open'].resample('M').mean().dropna()
+    weekly_open = df['open'].resample('W').mean().dropna()
+    daily_open = df['open'].resample('D').mean().dropna()
+    four_hour_open = df['open'].resample('4H').mean().dropna()
+    hourly_open = df['open'].resample('1H').mean().dropna()
 
-    forecast_array = np.array(future_prediction)
-    future_prediction_inv = scaler.inverse_transform(forecast_array.reshape(-1, 1))
+    colors = {'monthly': '#FF4136', 'weekly': '#2ECC40', 'daily': '#0074D9', '4h': '#FF851B', '1h': '#B10DC9'}
 
-    future_days = pd.date_range(start=data_df.index[-1] + pd.Timedelta(days=1), periods=request.n_periods, freq='D')
-    f_df = pd.DataFrame({'dates': future_days, 'open': future_prediction_inv.flatten()})
+    figs = {}
+    figs['monthly'] = px.line(x=monthly_open.index, y=monthly_open.values, title='Monthly Average Open Price').update_traces(line_color=colors['monthly']).to_json()
+    figs['weekly'] = px.line(x=weekly_open.index, y=weekly_open.values, title='Weekly Average Open Price').update_traces(line_color=colors['weekly']).to_json()
+    figs['daily'] = px.line(x=daily_open.index, y=daily_open.values, title='Daily Average Open Price').update_traces(line_color=colors['daily']).to_json()
+    figs['4h'] = px.line(x=four_hour_open.index, y=four_hour_open.values, title='4-Hour Average Open Price').update_traces(line_color=colors['4h']).to_json()
+    figs['1h'] = px.line(x=hourly_open.index, y=hourly_open.values, title='Hourly Average Open Price').update_traces(line_color=colors['1h']).to_json()
 
-    return f_df.to_dict('records')
+    return figs
+
+@router.get("/indicators/values")
+async def get_indicator_values():
+    if data_df is None:
+        return {"error": "No data loaded"}
+
+    df = data_df.copy()
+    df['rsi'] = ta.momentum.RSIIndicator(close=df['open'], window=14).rsi()
+    df['macd'] = ta.trend.MACD(close=df['open']).macd()
+    df['macd_signal'] = ta.trend.MACD(close=df['open']).macd_signal()
+    df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['open'], window=14).average_true_range()
+
+    rsi_val = round(df['rsi'].iloc[-1], 2)
+    macd_val = round(df['macd'].iloc[-1], 4)
+    macd_sig_val = round(df['macd_signal'].iloc[-1], 4)
+    atr_val = round(df['atr'].iloc[-1], 4)
+    atr_mean = round(df['atr'].rolling(50).mean().iloc[-1], 4)
+
+    return {
+        "rsi": rsi_val,
+        "macd": macd_val,
+        "macd_signal": macd_sig_val,
+        "atr": atr_val,
+        "atr_mean": atr_mean
+    }
+
+@router.get("/charts/rsi")
+async def get_rsi_chart():
+    if data_df is None:
+        return {"error": "No data loaded"}
+
+    df = data_df.copy()
+    df['rsi'] = ta.momentum.RSIIndicator(close=df['open'], window=14).rsi()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], name='RSI', line=dict(color='brown')))
+    fig.add_hline(y=70, line_color='orange', annotation_text="Overbought (70)")
+    fig.add_hline(y=50, line_color='red', annotation_text="50% Line")
+    fig.add_hline(y=30, line_color='green', annotation_text="Oversold (30)")
+    fig.update_layout(title='Relative Strength Index (RSI) Indicator', yaxis=dict(range=[0, 100]))
+
+    return fig.to_json()
+
+@router.get("/charts/macd")
+async def get_macd_chart():
+    if data_df is None:
+        return {"error": "No data loaded"}
+
+    df = data_df.copy()
+    df['macd'] = ta.trend.MACD(close=df['open']).macd()
+    df['macd_signal'] = ta.trend.MACD(close=df['open']).macd_signal()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['macd'], mode='lines', name='MACD', line=dict(color='blue')))
+    fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], mode='lines', name='Signal', line=dict(color='orange')))
+    fig.add_shape(type='line', x0=df.index[0], x1=df.index[-1], y0=0, y1=0, line=dict(color='black', dash='dot'))
+    fig.update_layout(title='MACD - Moving Average Convergence Divergence')
+
+    return fig.to_json()
+
+@router.get("/charts/atr")
+async def get_atr_chart():
+    if data_df is None:
+        return {"error": "No data loaded"}
+
+    df = data_df.copy()
+    df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['open'], window=14).average_true_range()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df['atr'], name='ATR', line=dict(color='green')))
+    fig.update_layout(title='Average True Range (ATR) Indicator')
+
+    return fig.to_json()
+
+@router.get("/pivot/values")
+async def get_pivot_values():
+    if data_df is None:
+        return {"error": "No data loaded"}
+
+    df = data_df.copy()
+    df['R4'] = df['close'] + (df['high'] - df['low']) * 1.1 / 2
+    df['R3'] = df['close'] + (df['high'] - df['low']) * 1.1 / 4
+    df['R2'] = df['close'] + (df['high'] - df['low']) * 1.1 / 6
+    df['R1'] = df['close'] + (df['high'] - df['low']) * 1.1 / 12
+    df['S1'] = df['close'] - (df['high'] - df['low']) * 1.1 / 12
+    df['S2'] = df['close'] - (df['high'] - df['low']) * 1.1 / 6
+    df['S3'] = df['close'] - (df['high'] - df['low']) * 1.1 / 4
+    df['S4'] = df['close'] - (df['high'] - df['low']) * 1.1 / 2
+    df['pivot'] = (df['R2'] + df['S2']) / 2
+
+    latest = df.iloc[-1]
+    return {
+        "pivot": latest['pivot'],
+        "r1": latest['R1'],
+        "r2": latest['R2'],
+        "r3": latest['R3'],
+        "r4": latest['R4'],
+        "s1": latest['S1'],
+        "s2": latest['S2'],
+        "s3": latest['S3'],
+        "s4": latest['S4']
+    }
