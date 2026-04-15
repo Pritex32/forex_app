@@ -82,7 +82,8 @@ app.include_router(trading_router)
 # Allow Vercel frontend to call backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://forex-frontend-2c27-d06fc29ps-pritex32s-projects.vercel.app/"],  # later replace with your Vercel URL
+    allow_origins=["https://forex-frontend-2c27-d06fc29ps-pritex32s-projects.vercel.app/",
+                 "https://forex-frontend-delta.vercel.app/"],  # later replace with your Vercel URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
