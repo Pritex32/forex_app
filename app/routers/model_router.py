@@ -20,8 +20,8 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 
 # Supabase setup
 def get_supabase_client():
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
     return create_client(supabase_url, supabase_key)
 
 supabase = get_supabase_client()
