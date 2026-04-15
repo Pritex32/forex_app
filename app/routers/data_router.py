@@ -89,11 +89,13 @@ async def fetch_oanda_data(request: DataFetchRequest):
                 'volume': int(c['volume'])
             })
 
-        last_time = pd.to_datetime(candles[-1]['time'], utc=True)
+        if candles:
+            last_time = max(pd.to_datetime(c['time'], utc=True) for c in candles)
 
-        if prev_last_time is not None and last_time <= prev_last_time:
-            raise HTTPException(status_code=500, detail="Last candle time has not moved forward.")
-            break
+            if prev_last_time is not None and last_time <= prev_last_time:
+                # Skip this batch if time didn't advance (possibly out-of-order data)
+                start_dt = prev_last_time + timedelta(seconds=1)
+                continue
 
         prev_last_time = last_time
         start_dt = last_time + timedelta(seconds=1)
