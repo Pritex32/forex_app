@@ -47,19 +47,14 @@ ACCOUNT_ID = '101-004-31663011-001'
 
 # Supabase setup
 def get_supabase_client():
-    supabase_url = 'https://bpxzfdxxidlfzvgdmwgk.supabase.co'
-    supabase_key = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJweHpmZHh4aWRsZnp2Z2Rtd2drIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI3NjM0MTQsImV4cCI6MjA1ODMzOTQxNH0.vQq2-VYCJyTQDq3QN2mJprmmBR2w7HMorqBuzz43HRU'
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+    if not supabase_url or not supabase_key:
+        raise ValueError("SUPABASE_URL and SUPABASE_KEY environment variables must be set")
     return create_client(supabase_url, supabase_key)
 
 supabase = get_supabase_client()
 
-# Load logos
-try:
-    priscomac_logo = Image.open("IMG-20250531-WA0006 (2).jpg")
-    bitcoin_logo = Image.open('Photos 5_31_2025 10_33_31 AM (2).png')
-    priscomac_resize = priscomac_logo.resize((200, 100))
-except:
-    pass
 
 # Global variables for models and scaler
 scaler = MinMaxScaler(feature_range=(0, 1))
@@ -82,8 +77,7 @@ app.include_router(trading_router)
 # Allow Vercel frontend to call backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://forex-frontend-2c27-d06fc29ps-pritex32s-projects.vercel.app/",
-                 "https://forex-frontend-delta.vercel.app/"],  # later replace with your Vercel URL
+    allow_origins=["*"],  # later replace with your Vercel URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
