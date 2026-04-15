@@ -3,6 +3,8 @@ import pandas as pd
 import ta
 import plotly.graph_objects as go
 import plotly.express as px
+from sklearn.svm import OneClassSVM
+from sklearn.cluster import KMeans
 from app.routers.model_router import data_df
 
 router = APIRouter(prefix="/api/indicators", tags=["indicators"])
@@ -67,6 +69,30 @@ async def get_indicator_values():
         "atr_mean": atr_mean
     }
 
+@router.get("/anomaly/detection")
+async def detect_anomalies():
+    if data_df is None:
+        return {"error": "No data loaded"}
+
+    df = data_df.copy()
+    # Use OneClassSVM for anomaly detection
+    svm = OneClassSVM(kernel='rbf', gamma=0.001, nu=0.1)
+    anomalies_svm = svm.fit_predict(df[['open']].values)
+    df['anomaly_svm'] = anomalies_svm
+
+    # Use KMeans for clustering
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    clusters = kmeans.fit_predict(df[['open']].values)
+    df['cluster'] = clusters
+
+    # Anomalies are where OneClassSVM predicts -1
+    anomaly_indices = df[df['anomaly_svm'] == -1].index.tolist()
+
+    return {
+        "anomalies": anomaly_indices,
+        "clusters": clusters.tolist()
+    }
+
 @router.get("/charts/rsi")
 async def get_rsi_chart():
     if data_df is None:
@@ -112,6 +138,20 @@ async def get_atr_chart():
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df['atr'], name='ATR', line=dict(color='green')))
     fig.update_layout(title='Average True Range (ATR) Indicator')
+
+    return fig.to_json()
+
+@router.get("/charts/1h")
+async def get_1h_chart():
+    if data_df is None:
+        return {"error": "No data loaded"}
+
+    df = data_df.copy()
+    df.index = pd.to_datetime(df.index)
+    hourly_open = df['open'].resample('1H').mean().dropna()
+
+    fig = px.line(x=hourly_open.index, y=hourly_open.values, title='Hourly Average Open Price', labels={'x': 'Date', 'y': 'Open Price'})
+    fig.update_traces(line_color='#B10DC9')
 
     return fig.to_json()
 
