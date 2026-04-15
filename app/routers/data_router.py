@@ -9,6 +9,7 @@ from oandapyV20 import API
 from oandapyV20.endpoints.instruments import InstrumentsCandles
 from oandapyV20.exceptions import V20Error
 import os
+import app.routers.model_router as model_router
 
 ACCESS_TOKEN = 'd917178f8075576c341cbe85848de18e-9575706fb366ffd63dbbd057ecc8d847'
 ACCOUNT_ID = '101-004-31663011-001'
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/api/data", tags=["data"])
 class DataFetchRequest(BaseModel):
     instrument: str = "GBP_USD"
     granularity: str = "D"
-    start_date: str = "2022-01-01"
+    start_date: str = "2024-01-01"
     access_token: str = ACCESS_TOKEN
     account_id: str = ACCOUNT_ID
     cache_file: Optional[str] = None
@@ -105,4 +106,8 @@ async def fetch_oanda_data(request: DataFetchRequest):
 
     df.to_csv(cache_file, index=False)
 
+    # Update global data_df
+    model_router.data_df = df
+
     return {"message": f"Saved {len(df)} candles to cache file: {cache_file}", "data": df.to_dict('records')}
+
