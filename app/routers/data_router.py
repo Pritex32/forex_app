@@ -18,7 +18,7 @@ TWELVE_DATA_API_KEY = '7bc7a66b670e4d2cbeca1cf9547b17d4'
 router = APIRouter(prefix="/api/data", tags=["data"])
 
 class DataFetchRequest(BaseModel):
-    instrument: str = "GBP_USD"
+    instrument: str
     granularity: str = "D"
     start_date: str = "2024-01-01"
     access_token: str = ACCESS_TOKEN
@@ -45,17 +45,12 @@ def run_fetch_oanda_data(request: DataFetchRequest):
     start_date = request.start_date
     access_token = request.access_token
     account_id = request.account_id
-    cache_file = request.cache_file or f'{instrument.lower()}_2021_present.csv'
+    cache_file = request.cache_file or f'{instrument.lower()}_{granularity}_2021_present.csv'
     sleep_time = request.sleep_time
     max_retries = request.max_retries
 
-    intraday_granularities = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4']
-
-    if granularity in intraday_granularities:
-        # Intraday data fetching not implemented yet
-        print("Intraday granularity not implemented yet")
-        return
-    else:
+    # ------------------- DAILY (OANDA) -------------------
+    if granularity == 'D':
         client = API(access_token=access_token)
         end_dt = pd.Timestamp.utcnow()
 
@@ -69,9 +64,10 @@ def run_fetch_oanda_data(request: DataFetchRequest):
             all_data = []
 
         prev_last_time = None
+        window_days = 490
 
         while start_dt < end_dt:
-            window_end = min(start_dt + timedelta(days=490), end_dt)
+            window_end = min(start_dt + timedelta(days=window_days), end_dt)
 
             params = {
                 "granularity": granularity,
@@ -121,6 +117,48 @@ def run_fetch_oanda_data(request: DataFetchRequest):
 
             time.sleep(sleep_time)
 
+    # ------------------- INTRADAY (TWELVEDATA) -------------------
+    else:
+        symbol = instrument.replace('_', '/')
+        interval_map = {
+            'M1': '1min',
+            'M5': '5min',
+            'M15': '15min',
+            'M30': '30min',
+            'H1': '1h',
+            'H4': '4h'
+        }
+        interval = interval_map.get(granularity, '1h')
+
+        if os.path.exists(cache_file):
+            cached_df = pd.read_csv(cache_file, parse_dates=['timestamp'])
+            cached_df['timestamp'] = pd.to_datetime(cached_df['timestamp'], utc=True)
+            start_dt = cached_df['timestamp'].max() + timedelta(seconds=1)
+            all_data = cached_df.to_dict('records')
+        else:
+            start_dt = pd.to_datetime(start_date, utc=True)
+            all_data = []
+
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={interval}&start_date={start_dt.strftime('%Y-%m-%d')}&apikey={TWELVE_DATA_API_KEY}"
+
+        response = requests.get(url)
+        data = response.json()
+
+        if 'values' in data:
+            for v in data['values']:
+                dt_str = v['datetime']
+                if not dt_str.endswith('Z'):
+                    dt_str += 'Z'
+
+                all_data.append({
+                    'timestamp': dt_str,
+                    'open': float(v['open']),
+                    'high': float(v['high']),
+                    'low': float(v['low']),
+                    'close': float(v['close'])
+                })
+
+    # ------------------- FINAL PROCESSING -------------------
     df = pd.DataFrame(all_data)
     df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
     df = df.drop_duplicates(subset='timestamp').sort_values('timestamp').reset_index(drop=True)
