@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 import pandas as pd
@@ -28,100 +28,105 @@ class DataFetchRequest(BaseModel):
     max_retries: int = 5
 
 @router.post("/fetch")
-async def fetch_oanda_data(request: DataFetchRequest):
+async def fetch_oanda_data(request: DataFetchRequest, background_tasks: BackgroundTasks):
     try:
-        instrument = request.instrument
-        granularity = request.granularity
-        start_date = request.start_date
-        access_token = request.access_token
-        account_id = request.account_id
-        cache_file = request.cache_file or f'{instrument.lower()}_2021_present.csv'
-        sleep_time = request.sleep_time
-        max_retries = request.max_retries
-
-        intraday_granularities = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4']
-
-        if granularity in intraday_granularities:
-            # ----------- (UNCHANGED) -----------
-            ...
-        else:
-            client = API(access_token=access_token)
-            end_dt = pd.Timestamp.utcnow()
-
-            if os.path.exists(cache_file):
-                cached_df = pd.read_csv(cache_file, parse_dates=['timestamp'])
-                cached_df['timestamp'] = pd.to_datetime(cached_df['timestamp'], utc=True)
-                start_dt = cached_df['timestamp'].max() + timedelta(seconds=1)
-                all_data = cached_df.to_dict('records')
-            else:
-                start_dt = pd.to_datetime(start_date, utc=True)
-                all_data = []
-
-            prev_last_time = None
-
-            while start_dt < end_dt:
-                window_end = min(start_dt + timedelta(days=490), end_dt)
-
-                params = {
-                    "granularity": granularity,
-                    "from": start_dt.strftime('%Y-%m-%dT%H:%M:%SZ'),
-                    "to": window_end.strftime('%Y-%m-%dT%H:%M:%SZ'),
-                    "price": "M"
-                }
-
-                r = InstrumentsCandles(instrument=instrument, params=params)
-
-                # ✅ FIX: retry loop must be INSIDE main loop
-                retries = 0
-                while retries <= max_retries:
-                    try:
-                        response = client.request(r)
-                        break
-                    except (V20Error, requests.exceptions.RequestException):
-                        retries += 1
-                        wait_time = sleep_time * retries
-                        if retries > max_retries:
-                            raise HTTPException(status_code=500, detail="Max retries reached.")
-                        time.sleep(wait_time)
-
-                candles = response['candles']
-
-                if not candles:
-                    break  # ✅ now valid (inside loop)
-
-                for c in candles:
-                    all_data.append({
-                        'timestamp': c['time'],
-                        'open': float(c['mid']['o']),
-                        'high': float(c['mid']['h']),
-                        'low': float(c['mid']['l']),
-                        'close': float(c['mid']['c']),
-                        'volume': int(c['volume'])
-                    })
-
-                last_time = max(pd.to_datetime(c['time'], utc=True) for c in candles)
-
-                if prev_last_time is not None and last_time <= prev_last_time:
-                    start_dt = prev_last_time + timedelta(seconds=1)
-                    continue
-
-                prev_last_time = last_time
-                start_dt = last_time + timedelta(seconds=1)
-
-                time.sleep(sleep_time)
-
-        df = pd.DataFrame(all_data)
-        df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
-        df = df.drop_duplicates(subset='timestamp').sort_values('timestamp').reset_index(drop=True)
-
-        df.to_csv(cache_file, index=False)
-
-        model_router.data_df = df
+        background_tasks.add_task(run_fetch_oanda_data, request)
 
         return {
-            "message": f"Saved {len(df)} candles to cache file: {cache_file}",
-            "data": df.to_dict('records')
+            "message": "Fetching started in background. Check later."
         }
 
     except Exception as e:
         return {"error": str(e)}
+
+def run_fetch_oanda_data(request: DataFetchRequest):
+    instrument = request.instrument
+    granularity = request.granularity
+    start_date = request.start_date
+    access_token = request.access_token
+    account_id = request.account_id
+    cache_file = request.cache_file or f'{instrument.lower()}_2021_present.csv'
+    sleep_time = request.sleep_time
+    max_retries = request.max_retries
+
+    intraday_granularities = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4']
+
+    if granularity in intraday_granularities:
+        # Intraday data fetching not implemented yet
+        print("Intraday granularity not implemented yet")
+        return
+    else:
+        client = API(access_token=access_token)
+        end_dt = pd.Timestamp.utcnow()
+
+        if os.path.exists(cache_file):
+            cached_df = pd.read_csv(cache_file, parse_dates=['timestamp'])
+            cached_df['timestamp'] = pd.to_datetime(cached_df['timestamp'], utc=True)
+            start_dt = cached_df['timestamp'].max() + timedelta(seconds=1)
+            all_data = cached_df.to_dict('records')
+        else:
+            start_dt = pd.to_datetime(start_date, utc=True)
+            all_data = []
+
+        prev_last_time = None
+
+        while start_dt < end_dt:
+            window_end = min(start_dt + timedelta(days=490), end_dt)
+
+            params = {
+                "granularity": granularity,
+                "from": start_dt.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                "to": window_end.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                "price": "M"
+            }
+
+            r = InstrumentsCandles(instrument=instrument, params=params)
+
+            retries = 0
+            while retries <= max_retries:
+                try:
+                    response = client.request(r)
+                    break
+                except (V20Error, requests.exceptions.RequestException):
+                    retries += 1
+                    wait_time = sleep_time * retries
+                    if retries > max_retries:
+                        print("Max retries reached.")
+                        return
+                    time.sleep(wait_time)
+
+            candles = response['candles']
+
+            if not candles:
+                break
+
+            for c in candles:
+                all_data.append({
+                    'timestamp': c['time'],
+                    'open': float(c['mid']['o']),
+                    'high': float(c['mid']['h']),
+                    'low': float(c['mid']['l']),
+                    'close': float(c['mid']['c']),
+                    'volume': int(c['volume'])
+                })
+
+            last_time = max(pd.to_datetime(c['time'], utc=True) for c in candles)
+
+            if prev_last_time is not None and last_time <= prev_last_time:
+                start_dt = prev_last_time + timedelta(seconds=1)
+                continue
+
+            prev_last_time = last_time
+            start_dt = last_time + timedelta(seconds=1)
+
+            time.sleep(sleep_time)
+
+    df = pd.DataFrame(all_data)
+    df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+    df = df.drop_duplicates(subset='timestamp').sort_values('timestamp').reset_index(drop=True)
+
+    df.to_csv(cache_file, index=False)
+
+    model_router.data_df = df
+
+    print(f"Saved {len(df)} candles to {cache_file}")
