@@ -48,4 +48,4 @@ async def fetch_twelve_data(request: TwelveDataRequest):
     for col in ['open', 'high', 'low', 'close', 'volume']:
         df[col] = df[col].astype(float)
 
-    return {"message": f"Fetched {len(df)} 1hr candles from Twelve Data", "data": df.to_dict('records')}
+    return {"message": f"Fetched {len(df)} {interval} candles from Twelve Data", "data": df.to_dict('records')}
